@@ -25,12 +25,9 @@ const (
 	
 	// RetryStrategyLinear uses linearly increasing delay between retries
 	RetryStrategyLinear RetryStrategy = "linear"
-	
-	// RetryStrategyRandom uses random delay between retries within a range
-	RetryStrategyRandom RetryStrategy = "random"
 )
 
-// RetryConfig holds retry configuration
+// RetryConfig holds retry configuration for actions
 type RetryConfig struct {
 	// MaxRetries is the maximum number of retries
 	MaxRetries int
@@ -46,12 +43,18 @@ type RetryConfig struct {
 	
 	// Jitter adds randomness to the retry delay to avoid thundering herd
 	Jitter float64
-	
-	// ConditionExpression is evaluated to determine if retry should be attempted
-	ConditionExpression string
 }
 
-// DefaultRetryConfig returns the default retry configuration
+// PollingConfig holds polling configuration for checks
+type PollingConfig struct {
+	// MaxAttempts is the maximum number of polling attempts
+	MaxAttempts int
+	
+	// Interval is the time between polling attempts
+	Interval time.Duration
+}
+
+// DefaultRetryConfig returns the default retry configuration for actions
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
 		MaxRetries: 3,
@@ -62,91 +65,64 @@ func DefaultRetryConfig() RetryConfig {
 	}
 }
 
-// getRetryConfig extracts retry configuration from an action or step
-func getRetryConfig(ctx *execContext.ExecutionContext, actionOrStep interface{}) (RetryConfig, error) {
+// getRetryConfig extracts retry configuration from an action
+func getRetryConfig(ctx *execContext.ExecutionContext, action *poc.Action) (RetryConfig, error) {
 	// Start with default config
 	config := DefaultRetryConfig()
 	
-	var retries int
-	var retryStrategy string
-	var retryDelay string
-	var retryIf string
-	
-	// Extract values based on type
-	switch v := actionOrStep.(type) {
-	case *poc.Action:
-		retries = v.Retries
-		retryStrategy = v.RetryStrategy
-		retryDelay = v.RetryDelay
-		retryIf = v.RetryIf
-		
-	case *poc.Step:
-		retries = v.Retries
-		retryStrategy = v.RetryStrategy
-		retryDelay = v.RetryDelay
-		retryIf = v.RetryIf
-		
-	case *poc.Loop:
-		retries = v.Retries
-		retryStrategy = v.RetryStrategy
-		retryDelay = v.RetryDelay
-		retryIf = v.RetryIf
-		
-	default:
-		return config, fmt.Errorf("unsupported type for retry configuration: %T", actionOrStep)
+	// Set retries if specified in the action
+	if action.Retries > 0 {
+		config.MaxRetries = action.Retries
 	}
 	
-	// Set retries if specified
-	if retries > 0 {
-		config.MaxRetries = retries
-	}
-	
-	// Set strategy if specified
-	if retryStrategy != "" {
-		resolvedStrategy, err := ctx.Substitute(retryStrategy)
-		if err != nil {
-			return config, fmt.Errorf("failed to resolve retry strategy: %w", err)
-		}
-		
-		switch strings.ToLower(resolvedStrategy) {
-		case "fixed", "constant":
-			config.Strategy = RetryStrategyFixed
-		case "exponential", "backoff":
-			config.Strategy = RetryStrategyExponential
-		case "linear", "incremental":
-			config.Strategy = RetryStrategyLinear
-		case "random", "jitter":
-			config.Strategy = RetryStrategyRandom
-		default:
-			return config, fmt.Errorf("unsupported retry strategy: %s", resolvedStrategy)
-		}
-	}
-	
-	// Set delay if specified
-	if retryDelay != "" {
-		resolvedDelay, err := ctx.Substitute(retryDelay)
+	// Parse retry delay if specified
+	if action.RetryDelay != "" {
+		// Try to resolve any variables in the delay string
+		resolvedDelay, err := ctx.Substitute(action.RetryDelay)
 		if err != nil {
 			return config, fmt.Errorf("failed to resolve retry delay: %w", err)
 		}
 		
-		// Check if it's a duration (e.g., "2s", "500ms")
+		// Parse delay duration (e.g., "1s", "500ms", "2.5s")
 		duration, err := time.ParseDuration(resolvedDelay)
-		if err == nil {
-			config.Delay = duration.Seconds()
-		} else {
-			// Try to parse as float
-			var delay float64
-			_, err = fmt.Sscanf(resolvedDelay, "%f", &delay)
-			if err != nil {
-				return config, fmt.Errorf("invalid retry delay format: %s", resolvedDelay)
-			}
-			config.Delay = delay
+		if err != nil {
+			return config, fmt.Errorf("invalid retry delay format: %w", err)
 		}
+		
+		// Convert to seconds
+		config.Delay = duration.Seconds()
 	}
 	
-	// Set condition if specified
-	if retryIf != "" {
-		config.ConditionExpression = retryIf
+	return config, nil
+}
+
+// getPollingConfig extracts polling configuration from a check
+func getPollingConfig(ctx *execContext.ExecutionContext, check *poc.Check) (PollingConfig, error) {
+	config := PollingConfig{
+		MaxAttempts: 1, // Default to a single attempt (no polling)
+		Interval:    time.Second, // Default interval of 1 second
+	}
+	
+	// Set max attempts if specified
+	if check.MaxAttempts > 0 {
+		config.MaxAttempts = check.MaxAttempts
+	}
+	
+	// Parse retry interval if specified
+	if check.RetryInterval != "" {
+		// Try to resolve any variables in the interval string
+		resolvedInterval, err := ctx.Substitute(check.RetryInterval)
+		if err != nil {
+			return config, fmt.Errorf("failed to resolve retry interval: %w", err)
+		}
+		
+		// Parse interval duration
+		interval, err := time.ParseDuration(resolvedInterval)
+		if err != nil {
+			return config, fmt.Errorf("invalid retry interval format: %w", err)
+		}
+		
+		config.Interval = interval
 	}
 	
 	return config, nil
@@ -159,30 +135,13 @@ func shouldRetry(ctx *execContext.ExecutionContext, config RetryConfig, actionRe
 		return false
 	}
 	
-	// If no error and no condition expression, don't retry
-	if err == nil && config.ConditionExpression == "" {
+	// If no error, don't retry
+	if err == nil {
 		return false
 	}
 	
-	// If a retry condition is specified, evaluate it
-	if config.ConditionExpression != "" {
-		// Store error and result in context for condition evaluation
-		ctx.SetVariable("_retry_error", err)
-		ctx.SetVariable("_retry_result", actionResult)
-		ctx.SetVariable("_retry_attempt", attempt)
-		
-		// Evaluate condition
-		result, evalErr := ctx.EvaluateCondition(config.ConditionExpression)
-		if evalErr != nil {
-			// If condition evaluation fails, default to basic error check
-			return err != nil
-		}
-		
-		return result
-	}
-	
 	// Default: retry if there was an error
-	return err != nil
+	return true
 }
 
 // calculateRetryDelay calculates the delay before the next retry attempt
@@ -200,15 +159,6 @@ func calculateRetryDelay(config RetryConfig, attempt int) time.Duration {
 	case RetryStrategyLinear:
 		// Base * attempt with max limit
 		delaySeconds = math.Min(config.Delay*float64(attempt+1), config.MaxDelay)
-		
-	case RetryStrategyRandom:
-		// Random delay between base and max
-		min := config.Delay
-		max := config.MaxDelay
-		if max <= min {
-			max = min * 2
-		}
-		delaySeconds = min + rand.Float64()*(max-min)
 		
 	default:
 		// Default to fixed
