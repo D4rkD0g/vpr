@@ -14,6 +14,7 @@ import (
 	
 	execContext "vpr/pkg/context"
 	"vpr/pkg/poc"
+	"vpr/pkg/utils"
 )
 
 // resourceHandler implements the ensure_resource_exists action
@@ -162,9 +163,9 @@ func resourceHandler(ctx *execContext.ExecutionContext, action *poc.Action) (int
 	}
 	
 	// Get HTTP client
-	client, err := getHTTPClient(ctx)
+	client, err := utils.GetHTTPClient(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get HTTP client: %w", err)
 	}
 	
 	// Result object to return

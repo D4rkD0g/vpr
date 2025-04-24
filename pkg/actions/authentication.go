@@ -7,14 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 	
 	"vpr/pkg/context"
-	"vpr/pkg/credentials"
 	"vpr/pkg/poc"
 	"vpr/pkg/utils"
 )
@@ -102,12 +99,6 @@ func formAuthentication(ctx *context.ExecutionContext, action *poc.Action) (inte
 		}
 	}
 	
-	// Get an HTTP client
-	client, err := utils.GetHTTPClient(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get HTTP client: %w", err)
-	}
-	
 	// Create request
 	req, err := http.NewRequest("POST", loginURL, strings.NewReader(formData.Encode()))
 	if err != nil {
@@ -130,6 +121,12 @@ func formAuthentication(ctx *context.ExecutionContext, action *poc.Action) (inte
 				req.Header.Set(key, resolvedValue)
 			}
 		}
+	}
+	
+	// Get HTTP client and send request
+	client, err := utils.GetHTTPClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get HTTP client: %w", err)
 	}
 	
 	// Send request
@@ -188,12 +185,6 @@ func oauth2ClientCredentialsAuthentication(ctx *context.ExecutionContext, action
 		formData.Set("scope", scope)
 	}
 	
-	// Create HTTP client
-	client, err := getHTTPClient(ctx)
-	if err != nil {
-		return nil, err
-	}
-	
 	// Create request
 	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(formData.Encode()))
 	if err != nil {
@@ -204,6 +195,12 @@ func oauth2ClientCredentialsAuthentication(ctx *context.ExecutionContext, action
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "VPR-PoCRunner/1.0")
+	
+	// Get HTTP client and send request
+	client, err := utils.GetHTTPClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get HTTP client: %w", err)
+	}
 	
 	// Send request
 	resp, err := client.Do(req)
@@ -282,12 +279,6 @@ func oauth2PasswordAuthentication(ctx *context.ExecutionContext, action *poc.Act
 		formData.Set("scope", scope)
 	}
 	
-	// Create HTTP client
-	client, err := getHTTPClient(ctx)
-	if err != nil {
-		return nil, err
-	}
-	
 	// Create request
 	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(formData.Encode()))
 	if err != nil {
@@ -298,6 +289,12 @@ func oauth2PasswordAuthentication(ctx *context.ExecutionContext, action *poc.Act
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "VPR-PoCRunner/1.0")
+	
+	// Get HTTP client and send request
+	client, err := utils.GetHTTPClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get HTTP client: %w", err)
+	}
 	
 	// Send request
 	resp, err := client.Do(req)
@@ -443,9 +440,19 @@ func processAuthResponse(ctx *context.ExecutionContext, action *poc.Action, resp
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
+
+	// Store the raw response status for potential checks
+	ctx.SetLastStatusCode(resp.StatusCode)
 	
+	// Handle non-success responses
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		err := fmt.Errorf("authentication failed with status %d: %s", resp.StatusCode, string(body))
+		ctx.SetLastError(err)
+		return nil, err
+	}
+
 	// Check if authentication was successful (2xx status code)
 	success := resp.StatusCode >= 200 && resp.StatusCode < 300
 	
@@ -584,36 +591,6 @@ func getRequiredParam(ctx *context.ExecutionContext, params map[string]interface
 	}
 	
 	return resolvedValue, nil
-}
-
-// getHTTPClient gets an HTTP client from the context or creates a new one
-func getHTTPClient(ctx *context.ExecutionContext) (*http.Client, error) {
-	// Try to get existing client from context
-	clientObj, err := ctx.ResolveVariable("http_client")
-	if err == nil && clientObj != nil {
-		if client, ok := clientObj.(*http.Client); ok {
-			return client, nil
-		}
-	}
-	
-	// Create a new client
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			// Allow up to 10 redirects
-			if len(via) >= 10 {
-				return fmt.Errorf("stopped after 10 redirects")
-			}
-			return nil
-		},
-	}
-	
-	// Store the client in the context for reuse
-	err = ctx.SetVariable("http_client", client)
-	if err != nil {
-		return nil, fmt.Errorf("failed to store HTTP client in context: %w", err)
-	}
-	
-	return client, nil
 }
 
 // init registers the action handler
