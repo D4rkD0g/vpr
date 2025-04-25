@@ -538,9 +538,7 @@ func parseDate(dateStr string) (time.Time, error) {
 
 // init registers utility action handlers
 func init() {
-	// Register the handlers
-	MustRegisterAction("wait", waitHandler)
-	MustRegisterAction("generate_data", generateDataHandler)
+	// wait和generate_data处理程序都已在专门的文件中注册，这里不再重复注册
 	
 	// Seed the random number generator
 	rand.Seed(time.Now().UnixNano())

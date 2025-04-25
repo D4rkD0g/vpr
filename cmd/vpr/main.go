@@ -8,13 +8,14 @@ import (
 	"log/slog"
 	"os"
 
-	"vpr/pkg/context" // Adjust imports
 	"vpr/pkg/executor"
 	"vpr/pkg/poc"
+	"vpr/pkg/reporter"
 
 	// Import action/check packages to trigger init() registration
 	_ "vpr/pkg/actions"
 	_ "vpr/pkg/checks"
+	_ "vpr/pkg/extractors" // Import extractors for init() registration
 )
 
 func main() {
@@ -47,7 +48,7 @@ func main() {
 
 	// 1. Load and Parse PoC
 	slog.Info("Loading PoC", "path", *pocPath)
-	pocDef, err := poc.LoadPoc(*pocPath)
+	pocDef, err := poc.LoadPocFromFile(*pocPath)
 	if err != nil {
 		slog.Error("Failed to load PoC", "path", *pocPath, "error", err)
 		os.Exit(1)
@@ -58,18 +59,14 @@ func main() {
 		// Decide whether to proceed or exit
 	}
 
-	// 2. Initialize Context
-	// TODO: Pass target overrides, credential strategy to context initialization
-	slog.Info("Initializing execution context")
-	execCtx, err := context.NewExecutionContext(&pocDef.Context)
-	if err != nil {
-		slog.Error("Failed to initialize context", "error", err)
-		os.Exit(1)
-	}
+	// 2. Configure execution options
+	slog.Info("Preparing for execution")
+	execOptions := executor.DefaultOptions()
+	// TODO: Set options based on command-line flags
 
 	// 3. Execute PoC
 	slog.Info("Starting PoC execution", "id", pocDef.Metadata.ID)
-	result, err := executor.Execute(pocDef, execCtx) // Execute returns final result & overall exec error
+	result, err := executor.Execute(pocDef, execOptions)
 
 	// 4. Report Results
 	slog.Info("PoC execution finished", "id", pocDef.Metadata.ID)

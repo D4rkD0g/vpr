@@ -1,0 +1,150 @@
+poc:
+  metadata:
+    id: VPR-Feature-Test-v1.0
+    title: Functional verification of VPR core features
+    dsl_version: "1.0"
+    target_application:
+      name: VPR Test Server
+    severity: Info
+    tags: [test, validation, core-features]
+
+  context:
+    description: Tests HTML/XML extractors, variable functions, and multipart form upload
+    environment:
+      - id: target_host
+        value: "localhost"
+      - id: target_port
+        value: "8080"
+      - id: target_scheme
+        value: "http"
+      - id: target_base_url
+        value: "{{ environment.target_scheme.Value }}://{{ environment.target_host.Value }}:{{ environment.target_port.Value }}"
+    variables:
+      - id: random_string
+        value: "{{ random(8) }}"
+      - id: test_data
+        value: "Hello World!"
+      - id: encoded_data
+        value: null  # Will be populated during execution
+      - id: html_data
+        value: null  # Will be populated from HTML response
+      - id: xml_data
+        value: null  # Will be populated from XML response
+    files:
+      - id: test_file
+        description: "Small text file for upload testing"
+        local_path: "/tmp/vpr_test_upload.txt"  # Will be created in setup
+
+  setup:
+    - step: 1
+      dsl: "Given the test server is running and accessible"
+      action:
+        type: http_request
+        request:
+          method: GET
+          url: "{{ environment.target_base_url.Value }}/html"
+          timeout: 5000  # 5 seconds
+      
+    - step: 2
+      dsl: "And a test file is created for multipart upload testing"
+      action:
+        type: execute_local_commands
+        # 使用简单字符串数组而不是复杂对象
+        commands: 
+          - "echo 'This is a test file created by VPR for multipart form upload testing. Random ID: {{ variables.random_string.Value }}' > /tmp/vpr_test_upload.txt"
+
+  exploit_scenario:
+    name: Feature Validation Tests
+    steps:
+      - step: 1
+        dsl: "When testing the variable function system"
+        action:
+          type: generate_data
+          target_variable: encoded_data
+          value: "{{ base64_encode(variables.test_data.Value) }}"
+
+      - step: 2
+        dsl: "And testing the HTTP request with HTML response"
+        action:
+          type: http_request
+          request:
+            method: GET
+            url: "{{ environment.target_base_url.Value }}/html"
+            headers:
+              Accept: "text/html"
+          response_actions:
+            - type: extract_from_html
+              css_selector: "#user-info .username"
+              target_variable: html_data
+
+      - step: 3
+        dsl: "And testing the HTTP request with XML response"
+        action:
+          type: http_request
+          request:
+            method: GET
+            url: "{{ environment.target_base_url.Value }}/xml"
+            headers:
+              Accept: "application/xml"
+          response_actions:
+            - type: extract_from_xml
+              xpath: "//user/@id"
+              target_variable: xml_data
+
+      - step: 4
+        dsl: "And testing file upload with multipart form"
+        action:
+          type: http_request
+          request:
+            method: POST
+            url: "{{ environment.target_base_url.Value }}/upload"
+            body_type: multipart
+            multipart:
+              files:
+                - parameter_name: "file"
+                  filename: "test_upload.txt"
+                  local_path: "/tmp/vpr_test_upload.txt"
+              data:
+                message: "Testing multipart upload with message: {{ url_encode(variables.test_data.Value) }}"
+
+  assertions:
+    - step: 1
+      dsl: "Then the variable function system should work correctly"
+      check:
+        type: variable_equals
+        variable: "encoded_data"
+        equals: "SGVsbG8gV29ybGQh"  # "Hello World!" in base64
+        
+    - step: 2
+      dsl: "And the HTML extractor should work correctly"
+      check:
+        type: variable_equals
+        variable: "html_data"
+        equals: "testuser"
+        
+    - step: 3
+      dsl: "And the XML extractor should work correctly"
+      check:
+        type: variable_equals
+        variable: "xml_data"
+        equals: "12345"
+        
+    - step: 4
+      dsl: "And the file upload with multipart form should work correctly"
+      check:
+        type: http_response_status
+        expected_status: 200
+        
+    - step: 5
+      dsl: "And the response body should contain a success message"
+      check:
+        type: http_response_body
+        contains: "success"
+
+  verification:
+    - step: 1
+      dsl: "After tests complete, cleanup the temporary file"
+      action:
+        type: execute_local_commands
+        commands:
+          - "rm -f /tmp/vpr_test_upload.txt"

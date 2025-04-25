@@ -570,30 +570,23 @@ func processAuthResponse(ctx *context.ExecutionContext, action *poc.Action, resp
 
 // getRequiredParam gets a required parameter from action parameters
 func getRequiredParam(ctx *context.ExecutionContext, params map[string]interface{}, paramName string) (string, error) {
-	if params == nil {
-		return "", fmt.Errorf("missing required parameter: %s (parameters map is nil)", paramName)
-	}
-	
+	// Get the parameter
 	paramValue, ok := params[paramName]
 	if !ok {
-		return "", fmt.Errorf("missing required parameter: %s", paramName)
+		return "", fmt.Errorf("required parameter missing: %s", paramName)
 	}
 	
-	paramStr, ok := paramValue.(string)
+	// Convert to string
+	stringValue, ok := paramValue.(string)
 	if !ok {
 		return "", fmt.Errorf("parameter %s must be a string", paramName)
 	}
 	
-	// Resolve any variables
-	resolvedValue, err := ctx.Substitute(paramStr)
+	// Resolve variables
+	resolvedValue, err := ctx.Substitute(stringValue)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve parameter %s: %w", paramName, err)
+		return "", fmt.Errorf("failed to resolve variables in parameter %s: %w", paramName, err)
 	}
 	
 	return resolvedValue, nil
-}
-
-// init registers the action handler
-func init() {
-	MustRegisterAction("authenticate", authenticationHandler)
 }

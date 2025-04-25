@@ -101,16 +101,14 @@ func ExecuteAction(ctx *context.ExecutionContext, action *poc.Action) (interface
 // InitStandardActions registers all standard actions defined in the DSL specification
 func InitStandardActions() {
 	// HTTP Actions
-	MustRegisterAction("http_request", nil) // TODO: Implement HTTP request handler
+	// 注：http_request已在http_request.go中注册，这里不再重复注册
 
 	// Setup & Control Actions
 	MustRegisterAction("ensure_users_exist", nil)      // TODO: Implement
 	MustRegisterAction("ensure_resource_exists", nil)  // TODO: Implement
 	MustRegisterAction("execute_local_commands", nil)  // TODO: Implement
 	MustRegisterAction("check_target_availability", nil) // TODO: Implement
-	MustRegisterAction("wait", nil)                    // TODO: Implement
-	MustRegisterAction("generate_data", nil)           // TODO: Implement
+	// 注：wait已在wait.go中注册，这里不再重复注册
+	// 注：generate_data已在generate_data.go中注册，这里不再重复注册
 	MustRegisterAction("manual_action", nil)           // TODO: Implement
-	
-	// These handlers will be implemented in separate files
 }

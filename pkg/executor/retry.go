@@ -1,14 +1,13 @@
-// Package executor implements the PoC execution engine.
-// This file implements enhanced retry strategies for handling transient failures.
+// Package executor implements retry logic for actions and steps
 package executor
 
 import (
 	"fmt"
 	"math"
 	"math/rand"
-	"strings"
 	"time"
 	
+	"vpr/pkg/actions"
 	execContext "vpr/pkg/context"
 	"vpr/pkg/poc"
 )
@@ -128,15 +127,105 @@ func getPollingConfig(ctx *execContext.ExecutionContext, check *poc.Check) (Poll
 	return config, nil
 }
 
+// RetryDecision represents the outcome of a retry condition evaluation
+type RetryDecision struct {
+	ShouldRetry bool
+	Reason      string
+}
+
+// RetryCondition is a function that evaluates whether to retry based on the result and error
+type RetryCondition func(result interface{}, err error) RetryDecision
+
+// DefaultRetryCondition returns the default retry condition that retries on errors only
+func DefaultRetryCondition() RetryCondition {
+	return func(result interface{}, err error) RetryDecision {
+		if err != nil {
+			return RetryDecision{
+				ShouldRetry: true,
+				Reason:      fmt.Sprintf("error occurred: %v", err),
+			}
+		}
+		return RetryDecision{
+			ShouldRetry: false,
+			Reason:      "operation succeeded",
+		}
+	}
+}
+
+// OrRetryCondition combines multiple retry conditions with OR logic
+func OrRetryCondition(conditions ...RetryCondition) RetryCondition {
+	return func(result interface{}, err error) RetryDecision {
+		for _, condition := range conditions {
+			decision := condition(result, err)
+			if decision.ShouldRetry {
+				return decision
+			}
+		}
+		return RetryDecision{
+			ShouldRetry: false,
+			Reason:      "no conditions indicated retry is needed",
+		}
+	}
+}
+
+// ResultContainsRetryCondition creates a condition that checks if a result map contains a specific key/value
+func ResultContainsRetryCondition(key string, expectedValue interface{}) RetryCondition {
+	return func(result interface{}, err error) RetryDecision {
+		// If there's an error, let the default handler deal with it
+		if err != nil {
+			return RetryDecision{
+				ShouldRetry: false,
+				Reason:      "error occurred, deferring to error condition",
+			}
+		}
+		
+		// Check if result is a map
+		resultMap, ok := result.(map[string]interface{})
+		if !ok {
+			return RetryDecision{
+				ShouldRetry: false,
+				Reason:      fmt.Sprintf("result is not a map, got %T", result),
+			}
+		}
+		
+		// Check if key exists
+		value, exists := resultMap[key]
+		if !exists {
+			return RetryDecision{
+				ShouldRetry: false,
+				Reason:      fmt.Sprintf("key '%s' not found in result", key),
+			}
+		}
+		
+		// Check if value matches expected
+		if value == expectedValue {
+			return RetryDecision{
+				ShouldRetry: true,
+				Reason:      fmt.Sprintf("key '%s' has expected value '%v'", key, expectedValue),
+			}
+		}
+		
+		return RetryDecision{
+			ShouldRetry: false,
+			Reason:      fmt.Sprintf("key '%s' has value '%v', not matching expected '%v'", key, value, expectedValue),
+		}
+	}
+}
+
 // shouldRetry determines if a retry should be attempted based on the error and configuration
-func shouldRetry(ctx *execContext.ExecutionContext, config RetryConfig, actionResult interface{}, err error, attempt int) bool {
+func shouldRetry(ctx *execContext.ExecutionContext, config RetryConfig, actionResult interface{}, err error, attempt int, condition RetryCondition) bool {
 	// If max retries reached, don't retry
 	if attempt >= config.MaxRetries {
 		return false
 	}
 	
-	// If no error, don't retry
+	// If no error, don't retry unless condition indicates otherwise
 	if err == nil {
+		// Apply custom condition if provided
+		if condition != nil {
+			decision := condition(actionResult, err)
+			return decision.ShouldRetry
+		}
 		return false
 	}
 	
@@ -180,118 +269,139 @@ func calculateRetryDelay(config RetryConfig, attempt int) time.Duration {
 }
 
 // retryAction retries an action with the specified configuration
-func retryAction(ctx *execContext.ExecutionContext, action *poc.Action, handler ActionHandler, attempt int, config RetryConfig) (interface{}, error) {
-	// Execute the action
+func retryAction(ctx *execContext.ExecutionContext, action *poc.Action, attempt int, config RetryConfig, condition RetryCondition) (interface{}, error) {
+	// Get the action registry
+	actionRegistry := actions.DefaultRegistry
+	
+	// Get action handler
+	handler, err := actionRegistry.Get(action.Type)
+	if err != nil {
+		return nil, fmt.Errorf("action handler not found for type '%s': %w", action.Type, err)
+	}
+	
+	// Execute action
 	result, err := handler(ctx, action)
 	
 	// Check if we should retry
-	if shouldRetry(ctx, config, result, err, attempt) {
-		// Calculate delay
+	if shouldRetry(ctx, config, result, err, attempt, condition) && attempt < config.MaxRetries {
+		// Calculate delay before retry
 		delay := calculateRetryDelay(config, attempt)
 		
 		// Log retry attempt
-		fmt.Printf("Retrying action '%s' (attempt %d/%d) after %v\n", action.Type, attempt+1, config.MaxRetries, delay)
+		fmt.Printf("[Retry] Attempt %d/%d for action '%s' after %s delay\n", 
+			attempt+1, config.MaxRetries, action.Type, delay)
 		
-		// Wait before retry
 		time.Sleep(delay)
 		
-		// Increment attempt counter and retry
-		return retryAction(ctx, action, handler, attempt+1, config)
+		// Retry with incremented attempt counter
+		return retryAction(ctx, action, attempt+1, config, condition)
 	}
 	
-	// Return final result
 	return result, err
 }
 
 // executeActionWithRetry executes an action with retry logic
-func executeActionWithRetry(ctx *execContext.ExecutionContext, action *poc.Action) (interface{}, error) {
-	// Get handler for action type
-	handler, err := GetActionHandler(action.Type)
-	if err != nil {
-		return nil, err
-	}
-	
+func executeActionWithRetry(ctx *execContext.ExecutionContext, action *poc.Action, condition RetryCondition) (interface{}, error) {
 	// Get retry configuration
 	config, err := getRetryConfig(ctx, action)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get retry config: %w", err)
 	}
 	
-	// If retries are specified, use retry logic
-	if config.MaxRetries > 0 {
-		return retryAction(ctx, action, handler, 0, config)
-	}
-	
-	// Otherwise, execute directly
-	return handler(ctx, action)
+	// Start with attempt 0
+	return retryAction(ctx, action, 0, config, condition)
 }
 
-// executeStepWithRetry executes a step with retry logic
-func executeStepWithRetry(ctx *execContext.ExecutionContext, step *poc.Step) (interface{}, error) {
-	// Get retry configuration
-	config, err := getRetryConfig(ctx, step)
-	if err != nil {
-		return nil, err
-	}
-	
-	attempt := 0
-	var stepResult interface{}
-	var stepErr error
-	
-	// Execute step with retries
-	for attempt <= config.MaxRetries {
-		if attempt > 0 {
-			// Calculate delay for retry
-			delay := calculateRetryDelay(config, attempt-1)
-			fmt.Printf("Retrying step '%s' (attempt %d/%d) after %v\n", step.Name, attempt, config.MaxRetries, delay)
-			time.Sleep(delay)
-		}
-		
-		// Execute step
-		stepResult, stepErr = executeStep(ctx, step)
-		
-		// Check if we should retry
-		if !shouldRetry(ctx, config, stepResult, stepErr, attempt) {
-			break
-		}
-		
-		attempt++
-	}
-	
-	return stepResult, stepErr
+// StepRunner is a function type for executing steps
+type StepRunner func(step *poc.Step, phase string, stepNumber int, ctx *execContext.ExecutionContext, options *ExecutorOptions) (*StepResult, error)
+
+// RetryableExecutor wraps a step execution function with retry capability
+type RetryableExecutor struct {
+	StepExecutor   StepRunner
+	Options        *ExecutorOptions
+	RetryCondition RetryCondition
 }
 
-// executeLoopWithRetry executes a loop with retry logic
-func executeLoopWithRetry(ctx *execContext.ExecutionContext, loop *poc.Loop) (interface{}, error) {
-	// Get retry configuration
-	config, err := getRetryConfig(ctx, loop)
+// NewRetryableExecutor creates a new retryable executor wrapper
+func NewRetryableExecutor(executor StepRunner, options *ExecutorOptions) *RetryableExecutor {
+	return &RetryableExecutor{
+		StepExecutor:   executor,
+		Options:        options,
+		RetryCondition: DefaultRetryCondition(),
+	}
+}
+
+// ExecuteStepWithRetry executes a step with retry logic
+func (e *RetryableExecutor) ExecuteStepWithRetry(step *poc.Step, phase string, stepNumber int, ctx *execContext.ExecutionContext) (*StepResult, error) {
+	// Step only has retry capability if it contains an action
+	if step.Action == nil {
+		// For steps without actions, just execute normally
+		return e.StepExecutor(step, phase, stepNumber, ctx, e.Options)
+	}
+	
+	// For steps with actions, use action retry logic first
+	result := &StepResult{
+		StartTime: time.Now(),
+	}
+	
+	// Execute action with retry
+	actionResult, err := executeActionWithRetry(ctx, step.Action, e.RetryCondition)
+	
+	// Update result
+	result.EndTime = time.Now()
+	result.Duration = result.EndTime.Sub(result.StartTime).Seconds()
+	result.Output = actionResult
+	
 	if err != nil {
-		return nil, err
+		result.Error = err
+		result.Success = false
+	} else {
+		result.Success = true
 	}
 	
-	attempt := 0
-	var loopResult interface{}
-	var loopErr error
-	
-	// Execute loop with retries
-	for attempt <= config.MaxRetries {
-		if attempt > 0 {
-			// Calculate delay for retry
-			delay := calculateRetryDelay(config, attempt-1)
-			fmt.Printf("Retrying loop '%s' (attempt %d/%d) after %v\n", loop.Name, attempt, config.MaxRetries, delay)
-			time.Sleep(delay)
-		}
-		
-		// Execute loop
-		loopResult, loopErr = executeLoop(ctx, loop)
-		
-		// Check if we should retry
-		if !shouldRetry(ctx, config, loopResult, loopErr, attempt) {
-			break
-		}
-		
-		attempt++
+	return result, err
+}
+
+// ExecuteLoopWithRetry executes a loop with retry capabilities
+func (e *RetryableExecutor) ExecuteLoopWithRetry(loop *poc.Loop, phase string, loopID string, ctx *execContext.ExecutionContext) (interface{}, error) {
+	// Get the collection to iterate over
+	collection, err := ctx.ResolveVariable(loop.Over)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve loop collection '%s': %w", loop.Over, err)
 	}
 	
-	return loopResult, loopErr
+	// Convert to slice if needed
+	var items []interface{}
+	switch v := collection.(type) {
+	case []interface{}:
+		items = v
+	case map[string]interface{}:
+		// For maps, iterate over keys
+		for k := range v {
+			items = append(items, k)
+		}
+	default:
+		return nil, fmt.Errorf("loop collection must be a slice or map, got %T", collection)
+	}
+	
+	// Iterate over items
+	var results []interface{}
+	for i, item := range items {
+		// Create a loop context with the current item
+		loopCtx, err := ctx.CreateLoopContext(loop.VariableName, item)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create loop context: %w", err)
+		}
+		
+		// Execute each step in the loop
+		for j, step := range loop.Steps {
+			stepResult, err := e.ExecuteStepWithRetry(&step, phase, i*len(loop.Steps)+j, loopCtx)
+			if err != nil && e.Options.StopOnFailure {
+				return results, fmt.Errorf("loop '%s' step %d failed: %w", loopID, j+1, err)
+			}
+			results = append(results, stepResult)
+		}
+	}
+	
+	return results, nil
 }

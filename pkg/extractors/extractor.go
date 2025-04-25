@@ -134,18 +134,18 @@ func runSingleExecution(step *poc.Step, phase string, ctx *context.ExecutionCont
 				err = handler.Execute(step.Action, ctx)
 			}
 		} else if step.Check != nil {
-			handler, exists := checks.GetRegistry().Get(step.Check.Type)
-			if !exists {
+			handler, err := checks.DefaultRegistry.Get(step.Check.Type)
+			if err != nil {
 				err = fmt.Errorf("unknown check type: %s", step.Check.Type)
 			} else {
 				slog.Debug("Evaluating check", "type", step.Check.Type, "attempt", attempt)
-				var checkResult bool
-				// Pass lastResponse from the relevant preceding action (needs better state passing)
-				// For now, pass nil or fetch last response from context if stored.
-				checkResult, err = handler.Evaluate(step.Check, ctx, lastResponse)
-				if err == nil && !checkResult {
-					// Explicitly create an error if check evaluated to false
-					err = fmt.Errorf("check evaluated to false")
+				
+				// Execute the check
+				success, checkErr := handler(ctx, step.Check)
+				if checkErr != nil {
+					err = fmt.Errorf("check execution failed: %w", checkErr)
+				} else if !success {
+					err = fmt.Errorf("check failed")
 				}
 			}
 		} else {

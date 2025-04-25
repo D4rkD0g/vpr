@@ -23,44 +23,44 @@ func LoadPocFromFile(filePath string) (*Poc, error) {
 		return nil, fmt.Errorf("failed to read PoC file '%s': %w", filePath, err)
 	}
 
-	// Try parsing as a wrapper first (has 'poc:' top-level key)
-	var pocWrapper PocWrapper
-	err = yaml.Unmarshal(data, &pocWrapper)
+	// 首先尝试解析为JSON/YAML结构，以确定是否有顶级'poc:'键
+	var rawMap map[string]interface{}
+	if err := yaml.Unmarshal(data, &rawMap); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML/JSON in '%s': %w", filePath, err)
+	}
 	
-	// If successful and has content, use the wrapped Poc
-	if err == nil && pocWrapper.Poc.Metadata.ID != "" {
-		// Basic Validation: Check DSL Version
-		if pocWrapper.Poc.Metadata.DslVersion != ExpectedDslVersion {
-			return nil, fmt.Errorf("invalid DSL version in '%s': expected '%s', got '%s'", 
-				filePath, ExpectedDslVersion, pocWrapper.Poc.Metadata.DslVersion)
+	var pocData []byte
+	
+	// 检查是否有顶级'poc:'键
+	if pocEntry, exists := rawMap["poc"]; exists {
+		// 如果存在顶级'poc:'键，直接提取其下的数据
+		pocBytes, err := yaml.Marshal(pocEntry)
+		if err != nil {
+			return nil, fmt.Errorf("failed to re-serialize 'poc:' entry: %w", err)
 		}
-		return &pocWrapper.Poc, nil
+		pocData = pocBytes
+	} else {
+		// 如果没有顶级'poc:'键，假设整个文件就是一个POC定义
+		pocData = data
 	}
-
-	// Otherwise try direct parse (no 'poc:' wrapper)
+	
+	// 解析提取的POC数据
 	var poc Poc
-	err = yaml.Unmarshal(data, &poc)
-	if err != nil {
-		// If both parse attempts failed, provide better error information
-		var node yaml.Node
-		if parseErr := yaml.Unmarshal(data, &node); parseErr == nil {
-			// Try to provide more information about where parsing failed
-			return nil, enhanceYamlError(filePath, data, err)
-		}
-		return nil, fmt.Errorf("failed to unmarshal YAML from '%s': %w", filePath, err)
+	if err := yaml.Unmarshal(pocData, &poc); err != nil {
+		return nil, fmt.Errorf("failed to parse POC data in '%s': %w", filePath, err)
 	}
-
-	// Basic Validation: Check DSL Version
+	
+	// 基本验证: 检查DSL版本
 	if poc.Metadata.DslVersion != ExpectedDslVersion {
 		return nil, fmt.Errorf("invalid DSL version in '%s': expected '%s', got '%s'", 
 			filePath, ExpectedDslVersion, poc.Metadata.DslVersion)
 	}
-
-	// Perform basic structural validation
+	
+	// 执行基本结构验证
 	if err := ValidatePoc(&poc); err != nil {
 		return nil, fmt.Errorf("validation failed for '%s': %w", filePath, err)
 	}
-
+	
 	return &poc, nil
 }
 
@@ -289,4 +289,11 @@ func SavePocToFile(poc *Poc, filePath string, asWrapper bool) error {
 	}
 	
 	return nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

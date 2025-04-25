@@ -41,6 +41,10 @@ func init() {
 	registeredFunctions["json_escape"] = jsonEscape
 	registeredFunctions["html_escape"] = htmlEscape
 	
+	// JSON functions
+	registeredFunctions["json_encode"] = jsonEncode
+	registeredFunctions["json_decode"] = jsonDecode
+	
 	// Additional utility functions
 	registeredFunctions["md5"] = md5Hash
 	registeredFunctions["sha1"] = sha1Hash
@@ -199,6 +203,43 @@ func htmlEscape(args ...interface{}) (interface{}, error) {
 	}
 	
 	return html.EscapeString(inputStr), nil
+}
+
+// jsonEncode encodes a value to JSON.
+func jsonEncode(args ...interface{}) (interface{}, error) {
+	if err := checkArgCount("json_encode", args, 1); err != nil {
+		return nil, err
+	}
+	
+	// Marshal the input value to JSON
+	encoded, err := json.Marshal(args[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to JSON encode value: %w", err)
+	}
+	
+	return string(encoded), nil
+}
+
+// jsonDecode decodes a JSON string to a value.
+func jsonDecode(args ...interface{}) (interface{}, error) {
+	if err := checkArgCount("json_decode", args, 1); err != nil {
+		return nil, err
+	}
+	
+	// Get the input JSON string
+	inputStr, err := toString(args[0])
+	if err != nil {
+		return nil, fmt.Errorf("json_decode requires a string argument: %w", err)
+	}
+	
+	// Unmarshal the JSON string to a value
+	var result interface{}
+	err = json.Unmarshal([]byte(inputStr), &result)
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON string: %w", err)
+	}
+	
+	return result, nil
 }
 
 //

@@ -35,6 +35,10 @@ type ExecutionContext struct {
 	// Error handling
 	lastError    error                 // Most recent error encountered
 	lastStatusCode int                 // Most recent HTTP status code
+	
+	// Execution tracking
+	lastStep    string                 // Most recent step ID or description
+	lastResponse []byte                // Most recent response body
 }
 
 // NewExecutionContext creates a new execution context and initializes the resolved map
@@ -680,4 +684,32 @@ func (ctx *ExecutionContext) SetHTTPClient(client *http.Client) {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	ctx.httpClient = client
+}
+
+// SetLastStep stores the current step ID or description
+func (ctx *ExecutionContext) SetLastStep(step string) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	ctx.lastStep = step
+}
+
+// GetLastStep retrieves the most recent step ID or description
+func (ctx *ExecutionContext) GetLastStep() string {
+	ctx.mu.RLock()
+	defer ctx.mu.RUnlock()
+	return ctx.lastStep
+}
+
+// SetLastResponse stores the most recent HTTP response body
+func (ctx *ExecutionContext) SetLastResponse(response []byte) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	ctx.lastResponse = response
+}
+
+// GetLastResponse retrieves the most recent HTTP response body
+func (ctx *ExecutionContext) GetLastResponse() []byte {
+	ctx.mu.RLock()
+	defer ctx.mu.RUnlock()
+	return ctx.lastResponse
 }

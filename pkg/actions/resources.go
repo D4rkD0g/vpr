@@ -23,14 +23,57 @@ func resourceHandler(ctx *execContext.ExecutionContext, action *poc.Action) (int
 		return nil, fmt.Errorf("invalid action type for resourceHandler: %s", action.Type)
 	}
 	
-	// Get required parameters
+	// Initialize parameters
 	params := action.Parameters
 	if params == nil {
-		return nil, fmt.Errorf("ensure_resource_exists requires parameters")
+		params = make(map[string]interface{})
 	}
 	
-	// Get resource type
-	resourceType, err := getRequiredParamStr(ctx, params, "resource_type")
+	// Get resource ID from action.Resource field (spec compliant) or from parameters
+	resourceID := action.Resource
+	if resourceID == "" {
+		// Try to get from parameters as fallback
+		if resourceParam, ok := params["resource"]; ok {
+			if resourceStr, ok := resourceParam.(string); ok {
+				var err error
+				resourceID, err = ctx.Substitute(resourceStr)
+				if err != nil {
+					return nil, fmt.Errorf("failed to resolve resource id: %w", err)
+				}
+			}
+		}
+		
+		if resourceID == "" {
+			// Also try resource_id parameter for backward compatibility
+			if resourceParam, ok := params["resource_id"]; ok {
+				if resourceStr, ok := resourceParam.(string); ok {
+					var err error
+					resourceID, err = ctx.Substitute(resourceStr)
+					if err != nil {
+						return nil, fmt.Errorf("failed to resolve resource_id: %w", err)
+					}
+				}
+			}
+		}
+	}
+	
+	// Get user context from action.UserContext field (spec compliant) or from parameters
+	userContext := action.UserContext
+	if userContext == "" {
+		// Try to get from parameters as fallback
+		if userParam, ok := params["user_context"]; ok {
+			if userStr, ok := userParam.(string); ok {
+				var err error
+				userContext, err = ctx.Substitute(userStr)
+				if err != nil {
+					return nil, fmt.Errorf("failed to resolve user_context: %w", err)
+				}
+			}
+		}
+	}
+	
+	// Get resource type - either from parameters or default to resourceID if not specified
+	resourceType, err := getParamStrWithDefault(ctx, params, "resource_type", resourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +160,16 @@ func resourceHandler(ctx *execContext.ExecutionContext, action *poc.Action) (int
 	var createBody io.Reader
 	if bodyParam, ok := params["create_body"]; ok {
 		if bodyStr, ok := bodyParam.(string); ok {
-			resolvedBody, err := ctx.Substitute(bodyStr)
+			// Substitute variables in the body string, including {{resource}} and {{user_context}}
+			bodyWithVars := bodyStr
+			if resourceID != "" {
+				bodyWithVars = strings.ReplaceAll(bodyWithVars, "{{resource}}", resourceID)
+			}
+			if userContext != "" {
+				bodyWithVars = strings.ReplaceAll(bodyWithVars, "{{user_context}}", userContext)
+			}
+			
+			resolvedBody, err := ctx.Substitute(bodyWithVars)
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve create_body: %w", err)
 			}
@@ -125,7 +177,30 @@ func resourceHandler(ctx *execContext.ExecutionContext, action *poc.Action) (int
 			createBody = strings.NewReader(resolvedBody)
 		} else if bodyMap, ok := bodyParam.(map[string]interface{}); ok {
 			// If body is a map, convert to JSON
-			jsonBody, err := json.Marshal(bodyMap)
+			// First, process any string values that might contain variables
+			processedMap := make(map[string]interface{})
+			for k, v := range bodyMap {
+				if vStr, ok := v.(string); ok {
+					// Handle special variable substitutions
+					if resourceID != "" {
+						vStr = strings.ReplaceAll(vStr, "{{resource}}", resourceID)
+					}
+					if userContext != "" {
+						vStr = strings.ReplaceAll(vStr, "{{user_context}}", userContext)
+					}
+					
+					// Regular variable substitution
+					resolvedValue, err := ctx.Substitute(vStr)
+					if err != nil {
+						return nil, fmt.Errorf("failed to resolve body value: %w", err)
+					}
+					processedMap[k] = resolvedValue
+				} else {
+					processedMap[k] = v
+				}
+			}
+			
+			jsonBody, err := json.Marshal(processedMap)
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal create_body: %w", err)
 			}
@@ -140,6 +215,14 @@ func resourceHandler(ctx *execContext.ExecutionContext, action *poc.Action) (int
 		if headersMap, ok := headersParam.(map[string]interface{}); ok {
 			for k, v := range headersMap {
 				if vStr, ok := v.(string); ok {
+					// Handle special variable substitutions
+					if resourceID != "" {
+						vStr = strings.ReplaceAll(vStr, "{{resource}}", resourceID)
+					}
+					if userContext != "" {
+						vStr = strings.ReplaceAll(vStr, "{{user_context}}", userContext)
+					}
+					
 					resolvedValue, err := ctx.Substitute(vStr)
 					if err != nil {
 						return nil, fmt.Errorf("failed to resolve header value: %w", err)
@@ -171,6 +254,8 @@ func resourceHandler(ctx *execContext.ExecutionContext, action *poc.Action) (int
 	// Result object to return
 	result := map[string]interface{}{
 		"resource_type": resourceType,
+		"resource_id":   resourceID,
+		"user_context":  userContext,
 		"exists":        false,
 		"created":       false,
 	}
@@ -196,6 +281,22 @@ func resourceHandler(ctx *execContext.ExecutionContext, action *poc.Action) (int
 		result["check_status_code"] = checkResp.StatusCode
 		result["check_headers"] = checkResp.Header
 		result["check_body"] = string(checkRespBody)
+		
+		// Try to extract resource ID from response if not provided
+		if resourceID == "" && len(checkRespBody) > 0 {
+			var respObj map[string]interface{}
+			if err := json.Unmarshal(checkRespBody, &respObj); err == nil {
+				// Look for common ID fields
+				for _, idField := range []string{"id", "resource_id", "resourceId", "ID"} {
+					if id, ok := respObj[idField]; ok {
+						if idStr, ok := id.(string); ok && idStr != "" {
+							result["resource_id"] = idStr
+							break
+						}
+					}
+				}
+			}
+		}
 	}
 	
 	// If resource exists, we're done
@@ -203,8 +304,16 @@ func resourceHandler(ctx *execContext.ExecutionContext, action *poc.Action) (int
 		result["exists"] = true
 		
 		// Store result in target variable if specified
-		if action.TargetVariable != "" {
-			err = ctx.SetVariable(action.TargetVariable, result)
+		targetVar := action.TargetVariable
+		// If output_variable is specified in parameters, use that instead (spec compliant)
+		if outputVar, ok := params["output_variable"]; ok {
+			if outputVarStr, ok := outputVar.(string); ok && outputVarStr != "" {
+				targetVar = outputVarStr
+			}
+		}
+		
+		if targetVar != "" {
+			err = ctx.SetVariable(targetVar, result)
 			if err != nil {
 				return result, fmt.Errorf("failed to set target variable: %w", err)
 			}
@@ -225,14 +334,38 @@ func resourceHandler(ctx *execContext.ExecutionContext, action *poc.Action) (int
 			result["create_status_code"] = createResp.StatusCode
 			result["create_headers"] = createResp.Header
 			result["create_body"] = string(createRespBody)
+			
+			// Try to extract resource ID from response if successful
+			if err == nil && len(createRespBody) > 0 {
+				var respObj map[string]interface{}
+				if json.Unmarshal(createRespBody, &respObj) == nil {
+					// Look for common ID fields
+					for _, idField := range []string{"id", "resource_id", "resourceId", "ID"} {
+						if id, ok := respObj[idField]; ok {
+							if idStr, ok := id.(string); ok && idStr != "" {
+								result["resource_id"] = idStr
+								break
+							}
+						}
+					}
+				}
+			}
 		}
 		
 		if err != nil {
 			result["create_error"] = err.Error()
 			
 			// Store result in target variable if specified
-			if action.TargetVariable != "" {
-				_ = ctx.SetVariable(action.TargetVariable, result)
+			targetVar := action.TargetVariable
+			// If output_variable is specified in parameters, use that instead (spec compliant)
+			if outputVar, ok := params["output_variable"]; ok {
+				if outputVarStr, ok := outputVar.(string); ok && outputVarStr != "" {
+					targetVar = outputVarStr
+				}
+			}
+			
+			if targetVar != "" {
+				_ = ctx.SetVariable(targetVar, result)
 			}
 			
 			return result, fmt.Errorf("resource creation failed: %w", err)
@@ -241,8 +374,16 @@ func resourceHandler(ctx *execContext.ExecutionContext, action *poc.Action) (int
 		result["created"] = created
 		
 		// Store result in target variable if specified
-		if action.TargetVariable != "" {
-			err = ctx.SetVariable(action.TargetVariable, result)
+		targetVar := action.TargetVariable
+		// If output_variable is specified in parameters, use that instead (spec compliant)
+		if outputVar, ok := params["output_variable"]; ok {
+			if outputVarStr, ok := outputVar.(string); ok && outputVarStr != "" {
+				targetVar = outputVarStr
+			}
+		}
+		
+		if targetVar != "" {
+			err = ctx.SetVariable(targetVar, result)
 			if err != nil {
 				return result, fmt.Errorf("failed to set target variable: %w", err)
 			}
@@ -251,12 +392,8 @@ func resourceHandler(ctx *execContext.ExecutionContext, action *poc.Action) (int
 		return result, nil
 	}
 	
-	// If we get here, resource doesn't exist and we can't create it
-	if action.TargetVariable != "" {
-		_ = ctx.SetVariable(action.TargetVariable, result)
-	}
-	
-	return result, fmt.Errorf("resource '%s' does not exist and no create endpoint provided", resourceType)
+	// If we get here, the resource doesn't exist and we couldn't create it
+	return result, fmt.Errorf("resource doesn't exist and no create endpoint provided")
 }
 
 // checkResourceExists checks if a resource exists
@@ -426,6 +563,31 @@ func getRequiredParamStr(ctx *execContext.ExecutionContext, params map[string]in
 	resolvedValue, err := ctx.Substitute(paramStr)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve parameter %s: %w", paramName, err)
+	}
+	
+	return resolvedValue, nil
+}
+
+// getParamStrWithDefault gets a string parameter from action parameters with a default value
+func getParamStrWithDefault(ctx *execContext.ExecutionContext, params map[string]interface{}, paramName, defaultValue string) (string, error) {
+	if params == nil {
+		return defaultValue, nil
+	}
+	
+	paramValue, ok := params[paramName]
+	if !ok {
+		return defaultValue, nil
+	}
+	
+	paramStr, ok := paramValue.(string)
+	if !ok {
+		return defaultValue, nil
+	}
+	
+	// Resolve any variables
+	resolvedValue, err := ctx.Substitute(paramStr)
+	if err != nil {
+		return defaultValue, fmt.Errorf("failed to resolve parameter %s: %w", paramName, err)
 	}
 	
 	return resolvedValue, nil

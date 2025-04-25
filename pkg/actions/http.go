@@ -170,9 +170,12 @@ func buildHTTPRequest(ctx *context.ExecutionContext, action *poc.Action) (*http.
 				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			}
 		case "multipart":
-			// The multipart form data handling would go here
-			// This would need to set the appropriate content type with boundary
-			// and prepare the multipart writer
+			// Handle multipart form data
+			err := handleMultipartRequest(ctx, action, req)
+			if err != nil {
+				return nil, fmt.Errorf("failed to process multipart form: %w", err)
+			}
+			// Content-Type is set by the multipart processor
 		}
 	}
 	
@@ -215,22 +218,20 @@ func logHTTPRequest(req *http.Request, action *poc.Action) {
 
 // logHTTPResponse logs an HTTP response at debug level
 func logHTTPResponse(resp *HTTPResponse) {
-	// Truncate body for logging
+	// Prepare a preview of the body (truncated if large)
 	bodyPreview := resp.Body
-	if len(bodyPreview) > 200 {
-		bodyPreview = bodyPreview[:200] + "..."
+	if len(bodyPreview) > 500 {
+		bodyPreview = bodyPreview[:500] + "... [truncated]"
 	}
 	
-	slog.Debug("HTTP Response",
-		"status", resp.StatusCode,
+	// Log the response at debug level
+	slog.Debug("HTTP response details", 
+		"status_code", resp.StatusCode,
 		"content_length", resp.ContentLength,
 		"response_time_ms", resp.ResponseTime,
 		"body_preview", bodyPreview,
 	)
 }
 
-// init registers the HTTP request handler
-func init() {
-	// Register the handler with the action registry
-	MustRegisterAction("http_request", httpRequestHandler)
-}
+// 注：init函数已移除，避免重复注册http_request处理程序
+// http_request.go文件已经注册了HTTPRequestHandler，它调用了httpRequestHandler
