@@ -13,6 +13,7 @@ import (
 	"vpr/pkg/checks"
 	"vpr/pkg/context"
 	"vpr/pkg/poc"
+	"vpr/pkg/extractors"
 )
 
 // ExecutionResult represents the outcome of executing a PoC
@@ -95,6 +96,10 @@ func Execute(pocDef *poc.Poc, options *ExecutorOptions) (*ExecutionResult, error
 	if err != nil {
 		return nil, fmt.Errorf("failed to create execution context: %w", err)
 	}
+	
+	// Set the extractor registry in the context
+	extractorRegistry := extractors.InitRegistry()
+	ctx.SetExtractorRegistry(extractorRegistry)
 	
 	// 4. Run phases in sequence according to DSL specification
 	

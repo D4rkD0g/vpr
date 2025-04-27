@@ -7,12 +7,14 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 	
 	"vpr/pkg/context"
+	"vpr/pkg/extractors"
 	"vpr/pkg/poc"
 	"vpr/pkg/utils"
 )
@@ -76,7 +78,75 @@ func httpRequestHandler(ctx *context.ExecutionContext, action *poc.Action) (inte
 	defer resp.Body.Close()
 	
 	// Process the response
-	return processHTTPResponse(resp, elapsedMs)
+	httpResp, err := processHTTPResponse(resp, elapsedMs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process HTTP response: %w", err)
+	}
+	
+	// Handle response actions if any
+	if action.ResponseActions != nil && len(action.ResponseActions) > 0 {
+		// Create a map to store the HTTP response data for extractors
+		respData := map[string]interface{}{
+			"status_code":    httpResp.StatusCode,
+			"headers":        httpResp.Headers,
+			"body":           httpResp.Body,
+			"response_time":  httpResp.ResponseTime,
+			"content_length": httpResp.ContentLength,
+			"url":            httpResp.URL,
+		}
+		
+		log.Printf("DEBUG: Processing %d response actions", len(action.ResponseActions))
+		
+		// Get the extractor registry
+		extractorRegistryObj := ctx.GetExtractorRegistry()
+		if extractorRegistryObj == nil {
+			return nil, fmt.Errorf("extractor registry not available")
+		}
+		
+		// Type assert to the correct type
+		extractorRegistry, ok := extractorRegistryObj.(*extractors.ExtractorRegistry)
+		if !ok {
+			return nil, fmt.Errorf("extractor registry is not of correct type")
+		}
+		
+		// Execute each response action
+		for i, responseAction := range action.ResponseActions {
+			// Get the handler for this extractor type
+			handler := extractorRegistry.Get(responseAction.Type)
+			if handler == nil {
+				return nil, fmt.Errorf("unknown extractor type: %s", responseAction.Type)
+			}
+			
+			log.Printf("DEBUG: Executing response action %d: %s", i+1, responseAction.Type)
+			
+			// Execute the extractor with the HTTP response data
+			// Need to get address of responseAction to convert from value to pointer type
+			_, err := handler(ctx, &responseAction, respData)
+			if err != nil {
+				return nil, fmt.Errorf("response action failed: %w", err)
+			}
+		}
+	}
+	
+	// Store the HTTP response in context for later checks
+	lastResponseVar := map[string]interface{}{
+		"status_code":    httpResp.StatusCode,
+		"headers":        httpResp.Headers,
+		"body":           httpResp.Body,
+		"response_time":  httpResp.ResponseTime,
+		"content_length": httpResp.ContentLength,
+		"url":            httpResp.URL,
+	}
+	
+	if err := ctx.SetVariable("last_http_response", lastResponseVar); err != nil {
+		log.Printf("WARNING: Failed to store last_http_response in context: %v", err)
+		// Continue even if setting the variable fails
+	} else {
+		log.Printf("DEBUG: Stored HTTP response in context as last_http_response (status=%d, url=%s)", 
+			httpResp.StatusCode, httpResp.URL)
+	}
+	
+	return httpResp, nil
 }
 
 // buildHTTPRequest constructs an HTTP request from action parameters

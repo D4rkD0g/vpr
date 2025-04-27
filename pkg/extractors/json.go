@@ -5,6 +5,7 @@ package extractors
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	
 	"vpr/pkg/context"
@@ -73,6 +74,21 @@ func extractFromJSONHandler(ctx *context.ExecutionContext, action *poc.HTTPRespo
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract data using JSONPath: %w", err)
 	}
+	
+	// Create a proper variable structure that matches the ContextVariable format
+	varStruct := &poc.ContextVariable{
+		ID:    action.TargetVariable,
+		Value: result,
+	}
+	
+	// Store the extracted data in the variables map
+	varsPath := "variables." + action.TargetVariable
+	if err := ctx.SetVariable(varsPath, varStruct); err != nil {
+		return nil, fmt.Errorf("failed to set target variable: %w", err)
+	}
+	
+	log.Printf("DEBUG: JSON extraction successful - target_variable='%s', extracted_value='%v'", 
+		action.TargetVariable, result)
 	
 	return result, nil
 }

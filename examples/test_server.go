@@ -51,7 +51,7 @@ const xmlResponse = `<?xml version="1.0" encoding="UTF-8"?>
 </response>`
 
 func main() {
-	port := "8081"
+	port := "8080"
 	if len(os.Args) > 1 {
 		port = os.Args[1]
 	}

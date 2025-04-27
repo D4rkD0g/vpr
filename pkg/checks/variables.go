@@ -1,10 +1,10 @@
-// Package checks implements check handlers for the VPR engine.
-// This file contains variable-related check implementations, including
-// equality check, contains check, and regex match check for variables.
+// Package checks provides custom condition checking for PoC assertions
 package checks
 
 import (
 	"fmt"
+	"log"
+	"reflect"
 	"regexp"
 	"strings"
 	
@@ -12,13 +12,9 @@ import (
 	"vpr/pkg/poc"
 )
 
-// variableEqualsCheck checks if a variable equals an expected value
+// variableEqualsCheck checks if a variable equals a specific value
 func variableEqualsCheck(ctx *context.ExecutionContext, check *poc.Check) (bool, error) {
-	if check.Type != "variable_equals" {
-		return false, fmt.Errorf("invalid check type for variableEqualsCheck: %s", check.Type)
-	}
-	
-	// Check requires path and equals fields
+	// Validate required fields
 	if check.Path == "" {
 		return false, fmt.Errorf("variable_equals check requires path field")
 	}
@@ -27,75 +23,40 @@ func variableEqualsCheck(ctx *context.ExecutionContext, check *poc.Check) (bool,
 		return false, fmt.Errorf("variable_equals check requires equals field")
 	}
 	
+	// Extract expected value as interface{}
+	expectedValue := check.Equals
+	
+	// Convert to string if it's a string type
+	expectedValueStr, isString := expectedValue.(string)
+	
+	// If expected is a string, resolve any variables
+	if isString {
+		resolvedStr, err := ctx.Substitute(expectedValueStr)
+		if err != nil {
+			return false, fmt.Errorf("failed to resolve expected value: %w", err)
+		}
+		expectedValue = resolvedStr
+		expectedValueStr = resolvedStr
+	}
+	
 	// Resolve the variable from context
 	variableValue, err := ctx.ResolveVariable(check.Path)
 	if err != nil {
-		return false, fmt.Errorf("failed to resolve variable at path %s: %w", check.Path, err)
+		return false, fmt.Errorf("failed to resolve variable '%s': %w", check.Path, err)
 	}
 	
+	// Add debug logging
+	log.Printf("DEBUG: Variable Check - Path: '%s', Expected: '%v', Actual: '%v', Types: exp=%T act=%T", 
+		check.Path, expectedValue, variableValue, expectedValue, variableValue)
+	
 	// Handle different types of expected values
-	switch expected := check.Equals.(type) {
-	case string:
-		// If expected is a string, check for variable substitution
-		resolvedExpected, err := ctx.Substitute(expected)
-		if err != nil {
-			return false, fmt.Errorf("failed to resolve equals value: %w", err)
-		}
-		
+	if isString {
 		// Convert variable value to string if it's not already
 		varStr := fmt.Sprintf("%v", variableValue)
-		return varStr == resolvedExpected, nil
-		
-	case int, float64, bool:
-		// For primitive types, do direct comparison
-		return variableValue == expected, nil
-		
-	case []interface{}:
-		// For arrays, check equality recursively
-		varArray, ok := variableValue.([]interface{})
-		if !ok {
-			return false, nil // Variable isn't an array
-		}
-		
-		if len(varArray) != len(expected) {
-			return false, nil // Different lengths
-		}
-		
-		// Simple element-by-element comparison
-		// Note: This is a shallow comparison and doesn't handle nested structures well
-		for i, item := range expected {
-			if i >= len(varArray) || item != varArray[i] {
-				return false, nil
-			}
-		}
-		return true, nil
-		
-	case map[string]interface{}:
-		// For maps, check equality recursively
-		varMap, ok := variableValue.(map[string]interface{})
-		if !ok {
-			return false, nil // Variable isn't a map
-		}
-		
-		if len(varMap) != len(expected) {
-			return false, nil // Different sizes
-		}
-		
-		// Simple key-by-key comparison
-		// Note: This is a shallow comparison and doesn't handle nested structures well
-		for k, v := range expected {
-			varValue, exists := varMap[k]
-			if !exists || v != varValue {
-				return false, nil
-			}
-		}
-		return true, nil
-		
-	default:
-		// For other types, do string representation comparison
-		expectedStr := fmt.Sprintf("%v", expected)
-		varStr := fmt.Sprintf("%v", variableValue)
-		return expectedStr == varStr, nil
+		return varStr == expectedValueStr, nil
+	} else {
+		// For other types, use reflect.DeepEqual
+		return reflect.DeepEqual(variableValue, expectedValue), nil
 	}
 }
 

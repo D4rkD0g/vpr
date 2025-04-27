@@ -5,10 +5,17 @@ package extractors
 import (
 	"fmt"
 	"regexp"
+	"log"
 	
 	"vpr/pkg/context"
 	"vpr/pkg/poc"
 )
+
+// extractFromRegexHandler extracts data from response bodies using regex
+// This is an alias for extractFromBodyRegexHandler to match the registry naming
+func extractFromRegexHandler(ctx *context.ExecutionContext, action *poc.HTTPResponseAction, data interface{}) (interface{}, error) {
+	return extractFromBodyRegexHandler(ctx, action, data)
+}
 
 // extractFromBodyRegexHandler extracts data from response bodies using regex
 func extractFromBodyRegexHandler(ctx *context.ExecutionContext, action *poc.HTTPResponseAction, data interface{}) (interface{}, error) {
@@ -68,13 +75,35 @@ func extractFromBodyRegexHandler(ctx *context.ExecutionContext, action *poc.HTTP
 	}
 	
 	// Determine which extraction method to use
+	var result interface{}
 	if action.ExtractAll {
 		// Extract all matches
-		return extractAllMatches(re, sourceText, action.Group)
+		result, err = extractAllMatches(re, sourceText, action.Group)
 	} else {
 		// Extract first match only
-		return extractFirstMatch(re, sourceText, action.Group)
+		result, err = extractFirstMatch(re, sourceText, action.Group)
 	}
+	
+	if err != nil {
+		return nil, err
+	}
+	
+	// Create a proper variable structure that matches the ContextVariable format
+	varStruct := &poc.ContextVariable{
+		ID:    action.TargetVariable,
+		Value: result,
+	}
+	
+	// Store the extracted data in the variables map
+	varsPath := "variables." + action.TargetVariable
+	if err := ctx.SetVariable(varsPath, varStruct); err != nil {
+		return nil, fmt.Errorf("failed to set target variable: %w", err)
+	}
+	
+	log.Printf("DEBUG: Regex extraction successful - target_variable='%s', extracted_value='%v'", 
+		action.TargetVariable, result)
+	
+	return result, nil
 }
 
 // extractFirstMatch extracts the first match from the source text
@@ -144,5 +173,5 @@ func extractAllMatches(re *regexp.Regexp, sourceText string, group *int) (interf
 // init registers regex extractor handler
 func init() {
 	// Register the handler with the extractor registry
-	MustRegisterExtractor("extract_from_body_regex", extractFromBodyRegexHandler)
+	MustRegisterExtractor("extract_from_body_regex", extractFromRegexHandler)
 }

@@ -47,16 +47,16 @@ func (r *ExtractorRegistry) MustRegister(extractorType string, handler Extractor
 }
 
 // Get retrieves an extractor handler by type
-func (r *ExtractorRegistry) Get(extractorType string) (ExtractorHandler, error) {
+func (r *ExtractorRegistry) Get(extractorType string) ExtractorHandler {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	handler, exists := r.handlers[extractorType]
 	if !exists {
-		return nil, fmt.Errorf("no handler registered for extractor type '%s'", extractorType)
+		return nil
 	}
 
-	return handler, nil
+	return handler
 }
 
 // Execute runs an extractor using the appropriate handler
@@ -75,9 +75,9 @@ func (r *ExtractorRegistry) Execute(ctx *context.ExecutionContext, action *poc.H
 	}
 
 	// Get the handler
-	handler, err := r.Get(action.Type)
-	if err != nil {
-		return nil, err
+	handler := r.Get(action.Type)
+	if handler == nil {
+		return nil, fmt.Errorf("no handler registered for extractor type '%s'", action.Type)
 	}
 
 	// Execute the extractor
@@ -111,6 +111,20 @@ func MustRegisterExtractor(extractorType string, handler ExtractorHandler) {
 // ExecuteExtractor executes an extractor using the default registry
 func ExecuteExtractor(ctx *context.ExecutionContext, action *poc.HTTPResponseAction, data interface{}) (interface{}, error) {
 	return DefaultRegistry.Execute(ctx, action, data)
+}
+
+// InitRegistry creates a new registry with all standard extractors registered
+func InitRegistry() *ExtractorRegistry {
+	registry := NewExtractorRegistry()
+	
+	// Register all standard extractors
+	registry.MustRegister("extract_from_html", extractFromHTMLHandler)
+	registry.MustRegister("extract_from_xml", extractFromXMLHandler)
+	registry.MustRegister("extract_from_json", extractFromJSONHandler)
+	registry.MustRegister("extract_from_regex", extractFromRegexHandler)
+	registry.MustRegister("extract_from_header", extractFromHeaderHandler)
+	
+	return registry
 }
 
 // InitStandardExtractors registers all standard extractors defined in the DSL specification

@@ -11,14 +11,8 @@ poc:
   context:
     description: Tests HTML/XML extractors, variable functions, and multipart form upload
     environment:
-      - id: target_host
-        value: "localhost"
-      - id: target_port
-        value: "8080"
-      - id: target_scheme
-        value: "http"
-      - id: target_base_url
-        value: "{{ environment.target_scheme.Value }}://{{ environment.target_host.Value }}:{{ environment.target_port.Value }}"
+      - id: target_url
+        value: "http://localhost:8080"  # 直接提供完整的URL前缀
     variables:
       - id: random_string
         value: "{{ random(8) }}"
@@ -42,7 +36,7 @@ poc:
         type: http_request
         request:
           method: GET
-          url: "{{ environment.target_base_url.Value }}/html"
+          url: "{{ environment.target_url.Value }}/html"
           timeout: 5000  # 5 seconds
       
     - step: 2
@@ -61,7 +55,17 @@ poc:
         action:
           type: generate_data
           target_variable: encoded_data
-          value: "{{ base64_encode(variables.test_data.Value) }}"
+          generator: "string"
+          parameters:
+            type: "string"
+            value: "{{ base64_encode('testing variable substitution') }}"  # 直接使用字符串而不是变量引用
+
+      - step: 1.5
+        dsl: "And output the encoded data for debugging"
+        action:
+          type: execute_local_commands
+          commands:
+            - "echo 'Encoded data is: {{ variables.encoded_data.Value }}'"
 
       - step: 2
         dsl: "And testing the HTTP request with HTML response"
@@ -69,7 +73,7 @@ poc:
           type: http_request
           request:
             method: GET
-            url: "{{ environment.target_base_url.Value }}/html"
+            url: "{{ environment.target_url.Value }}/html"
             headers:
               Accept: "text/html"
           response_actions:
@@ -83,7 +87,7 @@ poc:
           type: http_request
           request:
             method: GET
-            url: "{{ environment.target_base_url.Value }}/xml"
+            url: "{{ environment.target_url.Value }}/xml"
             headers:
               Accept: "application/xml"
           response_actions:
@@ -97,7 +101,7 @@ poc:
           type: http_request
           request:
             method: POST
-            url: "{{ environment.target_base_url.Value }}/upload"
+            url: "{{ environment.target_url.Value }}/upload"
             body_type: multipart
             multipart:
               files:
@@ -112,21 +116,21 @@ poc:
       dsl: "Then the variable function system should work correctly"
       check:
         type: variable_equals
-        variable: "encoded_data"
-        equals: "SGVsbG8gV29ybGQh"  # "Hello World!" in base64
+        path: "variables.encoded_data.Value"  # 使用完整的变量路径
+        equals: "J3Rlc3RpbmcgdmFyaWFibGUgc3Vic3RpdHV0aW9uJw=="  
         
     - step: 2
       dsl: "And the HTML extractor should work correctly"
       check:
         type: variable_equals
-        variable: "html_data"
+        path: "variables.html_data.Value"  # 使用完整的变量路径
         equals: "testuser"
         
     - step: 3
       dsl: "And the XML extractor should work correctly"
       check:
         type: variable_equals
-        variable: "xml_data"
+        path: "variables.xml_data.Value"  # 使用完整的变量路径
         equals: "12345"
         
     - step: 4

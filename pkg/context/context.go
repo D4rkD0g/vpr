@@ -32,6 +32,9 @@ type ExecutionContext struct {
 	// Other runtime state
 	httpClient   *http.Client          // Reusable HTTP client
 	
+	// Registries
+	extractorRegistry interface{} // Registry for extractors
+	
 	// Error handling
 	lastError    error                 // Most recent error encountered
 	lastStatusCode int                 // Most recent HTTP status code
@@ -712,4 +715,18 @@ func (ctx *ExecutionContext) GetLastResponse() []byte {
 	ctx.mu.RLock()
 	defer ctx.mu.RUnlock()
 	return ctx.lastResponse
+}
+
+// GetExtractorRegistry returns the extractor registry
+func (c *ExecutionContext) GetExtractorRegistry() interface{} {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.extractorRegistry
+}
+
+// SetExtractorRegistry sets the extractor registry
+func (c *ExecutionContext) SetExtractorRegistry(registry interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.extractorRegistry = registry
 }

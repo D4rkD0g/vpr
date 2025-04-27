@@ -4,6 +4,7 @@ package actions
 
 import (
 	"fmt"
+	"log"
 	"log/slog"
 	"math/rand"
 	"regexp"
@@ -105,10 +106,29 @@ func generateDataHandler(ctx *context.ExecutionContext, action *poc.Action) (int
 		return nil, fmt.Errorf("failed to generate data: %w", err)
 	}
 	
-	// Store the generated data in the specified variable
-	err = ctx.SetVariable(action.TargetVariable, generatedData)
+	// Debug output for variable and value
+	log.Printf("DEBUG: Generated data for variable '%s': %v (type: %T)", 
+		action.TargetVariable, generatedData, generatedData)
+	
+	// Create a proper variable structure that matches the ContextVariable format
+	varStruct := &poc.ContextVariable{
+		ID: action.TargetVariable,
+		Value: generatedData,
+	}
+	
+	// Store the generated data in the variables map
+	varsPath := "variables." + action.TargetVariable
+	err = ctx.SetVariable(varsPath, varStruct)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store generated data in variable: %w", err)
+	}
+	
+	// Verify the variable was set properly
+	val, err := ctx.ResolveVariable("variables." + action.TargetVariable)
+	if err != nil {
+		log.Printf("WARNING: Failed to verify variable was set: %v", err)
+	} else {
+		log.Printf("DEBUG: Variable verification - %v", val)
 	}
 	
 	return generatedData, nil
@@ -118,6 +138,16 @@ func generateDataHandler(ctx *context.ExecutionContext, action *poc.Action) (int
 
 // generateString generates a random string with specified options
 func generateString(ctx *context.ExecutionContext, params map[string]interface{}) (interface{}, error) {
+	// Check for direct value first
+	if value, ok := params["value"].(string); ok {
+		// Resolve any variables in the value
+		resolvedValue, err := ctx.Substitute(value)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve value: %w", err)
+		}
+		return resolvedValue, nil
+	}
+	
 	// Get length parameter
 	length := 10 // Default length
 	if lenParam, ok := params["length"].(float64); ok {

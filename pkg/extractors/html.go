@@ -4,7 +4,7 @@ package extractors
 
 import (
 	"fmt"
-	"log/slog"
+	"log"
 	"strings"
 	
 	"vpr/pkg/context"
@@ -28,10 +28,8 @@ func extractFromHTMLHandler(ctx *context.ExecutionContext, action *poc.HTTPRespo
 		return nil, fmt.Errorf("extract_from_html requires target_variable field")
 	}
 	
-	slog.Debug("Extracting from HTML", 
-		"target_variable", action.TargetVariable,
-		"css_selector", action.CSSSelector,
-		"xpath", action.XPath)
+	log.Printf("DEBUG: Extracting from HTML - target_variable='%s', css_selector='%s', xpath='%s'", 
+		action.TargetVariable, action.CSSSelector, action.XPath)
 	
 	// Get the source HTML content
 	var htmlContent string
@@ -80,8 +78,13 @@ func extractFromHTMLHandler(ctx *context.ExecutionContext, action *poc.HTTPRespo
 		// Extract data using CSS selector
 		result, err = extractWithCSSSelector(doc, cssSelector, action.Attribute, action.ExtractAll)
 		if err != nil {
+			log.Printf("DEBUG: HTML extraction failed: %v", err)
 			return nil, fmt.Errorf("failed to extract data using CSS selector: %w", err)
 		}
+		
+		// Extra debug output
+		log.Printf("DEBUG: HTML extraction result - selector='%s', result='%v', type=%T", 
+			cssSelector, result, result)
 	} else if action.XPath != "" {
 		// Resolve any variables in the XPath
 		xpath, err := ctx.Substitute(action.XPath)
@@ -95,15 +98,21 @@ func extractFromHTMLHandler(ctx *context.ExecutionContext, action *poc.HTTPRespo
 			return nil, fmt.Errorf("failed to extract data using XPath: %w", err)
 		}
 	}
+
+	// Create a proper variable structure that matches the ContextVariable format
+	varStruct := &poc.ContextVariable{
+		ID:    action.TargetVariable,
+		Value: result,
+	}
 	
-	// Set variable with extracted data
-	if err := ctx.SetVariable(action.TargetVariable, result); err != nil {
+	// Store the extracted data in the variables map
+	varsPath := "variables." + action.TargetVariable
+	if err := ctx.SetVariable(varsPath, varStruct); err != nil {
 		return nil, fmt.Errorf("failed to set target variable: %w", err)
 	}
 	
-	slog.Info("Extracted data from HTML", 
-		"target_variable", action.TargetVariable,
-		"result_type", fmt.Sprintf("%T", result))
+	log.Printf("DEBUG: HTML extraction successful - target_variable='%s', extracted_value='%v'", 
+		action.TargetVariable, result)
 	
 	return result, nil
 }

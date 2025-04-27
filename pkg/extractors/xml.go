@@ -84,13 +84,20 @@ func extractFromXMLHandler(ctx *context.ExecutionContext, action *poc.HTTPRespon
 	
 	var result interface{}
 	
+	// Check if we're dealing with attribute nodes (XPath like //element/@attr)
+	isAttributeXPath := strings.Contains(xpath, "/@")
+	
 	// Extract the requested data from nodes
 	if action.ExtractAll {
 		// Extract all matching nodes
 		results := make([]string, 0, len(nodes))
 		
 		for _, node := range nodes {
-			if action.Attribute != "" {
+			if isAttributeXPath {
+				// When XPath selects attributes directly (e.g., //user/@id), 
+				// the node.Data is the attribute name, but we want the value
+				results = append(results, node.InnerText())
+			} else if action.Attribute != "" {
 				// Extract attribute if specified
 				for _, attr := range node.Attr {
 					if attr.Name.Local == action.Attribute {
@@ -110,7 +117,11 @@ func extractFromXMLHandler(ctx *context.ExecutionContext, action *poc.HTTPRespon
 		// Extract only the first node
 		node := nodes[0]
 		
-		if action.Attribute != "" {
+		if isAttributeXPath {
+			// When XPath selects attributes directly (e.g., //user/@id),
+			// we need to get the attribute value, not the name
+			result = node.InnerText()
+		} else if action.Attribute != "" {
 			// Extract attribute if specified
 			var attributeValue string
 			attributeFound := false
@@ -134,14 +145,21 @@ func extractFromXMLHandler(ctx *context.ExecutionContext, action *poc.HTTPRespon
 		}
 	}
 	
-	// Set variable with extracted data
-	if err := ctx.SetVariable(action.TargetVariable, result); err != nil {
+	// Create a proper variable structure that matches the ContextVariable format
+	varStruct := &poc.ContextVariable{
+		ID:    action.TargetVariable,
+		Value: result,
+	}
+
+	// Store the extracted data in the variables map
+	varsPath := "variables." + action.TargetVariable
+	if err := ctx.SetVariable(varsPath, varStruct); err != nil {
 		return nil, fmt.Errorf("failed to set target variable: %w", err)
 	}
-	
-	slog.Info("Extracted data from XML", 
+
+	slog.Debug("XML extraction successful",
 		"target_variable", action.TargetVariable,
-		"result_type", fmt.Sprintf("%T", result))
+		"extracted_value", result)
 	
 	return result, nil
 }
